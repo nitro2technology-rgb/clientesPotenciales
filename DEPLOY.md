@@ -66,14 +66,19 @@ Comprobar en cualquier momento, sin subir nada:
 
 ## Paso 3 — Desplegar
 
-```bash
-vercel login          # abre el navegador
-vercel link           # crear proyecto nuevo, nombre: scrapping-nitro2tech
-vercel --prod
-```
+El proyecto ya existe: **`scrapping-nitro2tech`**, en el equipo `nitro2-tech`,
+con el repo `nitro2technology-rgb/clientesPotenciales` conectado.
 
-Sale una URL tipo `https://scrapping-nitro2tech.vercel.app`. Todavía fallará:
-faltan las variables de entorno.
+### Si los despliegues automáticos se quedan en `UNKNOWN`
+
+Pasó la primera vez: Vercel creaba el despliegue pero no podía clonar, sin logs
+ni duración. Es que a su GitHub App le falta permiso sobre la organización.
+
+`https://github.com/organizations/nitro2technology-rgb/settings/installations`
+→ **Vercel** → **Configure** → dar acceso a `clientesPotenciales` → **Save**.
+
+Después, en Vercel → *Deployments* → `···` → **Redeploy**, desmarcando *Use
+existing Build Cache*.
 
 ---
 
@@ -94,9 +99,18 @@ Marca los tres entornos (Production, Preview, Development).
 | `CELDAS_POR_SESION` | `5` |
 | `CONFIRMAR_ANTES_DE_GASTAR` | `true` |
 
-Google Sheets (opcional, hoy no está configurado): en el servidor no hay dónde
-dejar el `.json`, así que se pega el JSON **entero en una línea** en
-`GOOGLE_SERVICE_ACCOUNT_JSON`, más `GOOGLE_SHEET_ID`.
+Google Sheets (ya configurado y verificado — hoja «Leads Google Maps»): en el
+servidor no hay dónde dejar el `.json`, así que su contenido va en una
+variable. Añade también:
+
+| Variable | Valor |
+|---|---|
+| `GOOGLE_SERVICE_ACCOUNT_JSON` | el contenido de `json de maps/service.json` |
+| `GOOGLE_SHEET_ID` | `1xrpddOYXUIvi84oKFKiEdwfI49wJR65NYDEGqMYIS5I` |
+| `GOOGLE_SHEET_TAB` | `Leads` |
+
+**No hace falta aplanarlo a una línea**: Vercel acepta valores multilínea y
+`json.loads` no distingue. Abre el archivo, copia todo y pega.
 
 Tras añadirlas hay que volver a desplegar para que las tome:
 
@@ -110,14 +124,19 @@ vercel --prod
 
 En Vercel: proyecto → *Settings* → *Domains* → *Add* → `scrapping.nitro2tech.com`.
 
-Vercel te dirá que crees este registro donde tengas el DNS de `nitro2tech.com`:
+El DNS de `nitro2tech.com` está en **Namecheap** (nameservers
+`dns1/dns2.registrar-servers.com`, o sea BasicDNS). El registro se crea en:
 
-```
-Tipo:   CNAME
-Nombre: scrapping
-Valor:  cname.vercel-dns.com
-TTL:    automático (o 3600)
-```
+**Domain List** → `nitro2tech.com` → **Manage** → pestaña **Advanced DNS** →
+**Add New Record**:
+
+| Type | Host | Value | TTL |
+|---|---|---|---|
+| `CNAME Record` | `scrapping` | `cname.vercel-dns.com` | Automatic |
+
+En **Host va solo `scrapping`**, no el dominio entero: Namecheap le añade
+`.nitro2tech.com` por su cuenta. Si Vercel muestra otro valor en su pantalla de
+Domains, manda el suyo.
 
 Propaga en minutos (a veces hasta una hora). El certificado HTTPS lo emite
 Vercel solo.
