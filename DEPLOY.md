@@ -213,6 +213,32 @@ histórico completo desde la base.
 
 ## Trampas del despliegue
 
+**No pongas una reescritura de rutas en `vercel.json`.** Vercel detecta
+FastAPI solo y genera su propio punto de entrada — la función construida se
+llama `fastapi`, no `api/index`. Si ademas se anade un `rewrites` del tipo
+`/(.*) -> /api/index/$1`, la reescritura si se aplica pero el envoltorio de
+`api/index.py` NO: Vercel lo ha sustituido por el suyo. Resultado: la app
+recibe `/api/index/...` sin limpiar y responde **404 a absolutamente todo**,
+incluida la portada, con la funcion perfectamente construida y en estado Ready.
+
+Cuesta de ver porque el 404 lo pinta FastAPI, no Vercel, asi que parece un
+problema de rutas de la app. Para distinguirlo:
+
+```bash
+vercel inspect <url-del-despliegue>   # mira la seccion Builds
+```
+
+- `└── λ fastapi (27MB)` -> Vercel uso su deteccion; no metas reescrituras.
+- sin ninguna `λ` -> no se construyo funcion; el problema es otro.
+
+`api/index.py` se deja porque no estorba (su envoltorio no hace nada si no hay
+prefijo) y sirve si algun dia se desactiva la deteccion automatica.
+
+**Los despliegues disparados por GitHub se quedaban en `UNKNOWN`**, sin logs ni
+duracion y sin construir funcion, mientras que `vercel --prod` desde local
+funcionaba. Si vuelve a pasar, revisa el permiso de la GitHub App (paso 3) y
+despliega por CLI mientras tanto.
+
 **Los 60 segundos de la función.** Plan Hobby: una petición no puede durar
 más. Un barrido de 5 sectores × 3 páginas son 15 llamadas a Google en serie.
 Va justo. Si ves errores `FUNCTION_INVOCATION_TIMEOUT`, baja *Sectores* a 2 o 3
