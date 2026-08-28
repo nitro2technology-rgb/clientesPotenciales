@@ -131,14 +131,24 @@ def verificar_sheet(email_cuenta: str) -> bool:
             print("       La app la creara sola en la primera busqueda.")
 
         # Prueba de ESCRITURA real: sin esto no sabriamos si es solo lectura.
-        hoja = libro.sheet1
-        celda_original = hoja.acell("Z999").value
-        hoja.update(values=[["prueba"]], range_name="Z999")
+        #
+        # La celda de prueba se calcula a partir del tamano de la rejilla, no
+        # se fija a mano: una hoja de 16 columnas rechaza cualquier referencia
+        # a la columna Z con "exceeds grid limits", y eso parecia un fallo de
+        # credenciales cuando en realidad la conexion estaba perfecta.
+        hoja = (
+            libro.worksheet(settings.google_sheet_tab)
+            if settings.google_sheet_tab in pestanas
+            else libro.sheet1
+        )
+        celda = gspread.utils.rowcol_to_a1(hoja.row_count, hoja.col_count)
+        celda_original = hoja.acell(celda).value
+        hoja.update(values=[["prueba"]], range_name=celda)
         if celda_original is None:
-            hoja.batch_clear(["Z999"])
+            hoja.batch_clear([celda])
         else:
-            hoja.update(values=[[celda_original]], range_name="Z999")
-        print(f"{OK} Permiso de ESCRITURA confirmado (celda de prueba borrada).")
+            hoja.update(values=[[celda_original]], range_name=celda)
+        print(f"{OK} Permiso de ESCRITURA confirmado (celda {celda} restaurada).")
         return True
 
     except Exception as exc:
