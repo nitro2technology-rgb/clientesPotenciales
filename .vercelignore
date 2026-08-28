@@ -1,0 +1,28 @@
+# Nunca subir a Vercel: pesa mucho o es secreto.
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+
+# Secretos: en Vercel van como variables de entorno, no como archivos.
+.env
+credentials/
+*service_account*.json
+Claves appi.txt
+
+# La base local. Desplegado se usa Turso.
+data/
+exports/
+*.db
+*.sqlite3
+*.xlsx
+*.csv
+
+# Documentacion y material de trabajo: no hace falta en la funcion.
+json de maps/
+CONTINUAR.md
+PROYECTO_LEADS_MAPS.md
+.git/
+.vscode/
+.idea/

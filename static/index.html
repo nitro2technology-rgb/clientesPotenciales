@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Generador de Leads · Google Maps</title>
+  <link rel="stylesheet" href="/static/styles.css" />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📍</text></svg>" />
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <span class="pin">📍</span>
+    <div>
+      <h1>Generador de Leads</h1>
+      <p>Negocios en Google Maps que <strong>no tienen página web</strong></p>
+    </div>
+  </div>
+  <div id="estado-chips" class="chips"></div>
+</header>
+
+<main>
+  <!-- ---------------------------------------------------- Formulario -->
+  <section class="card form-card">
+    <form id="form-busqueda">
+      <div class="grid">
+        <label class="campo">
+          <span>Ciudad o zona</span>
+          <input id="ciudad" type="text" placeholder="Bogotá, Colombia" required
+                 autocomplete="off" list="ciudades-sugeridas" />
+          <datalist id="ciudades-sugeridas">
+            <option value="Bogotá, Colombia"></option>
+            <option value="Medellín, Colombia"></option>
+            <option value="Cali, Colombia"></option>
+            <option value="Barranquilla, Colombia"></option>
+            <option value="Cartagena, Colombia"></option>
+          </datalist>
+        </label>
+
+        <label class="campo">
+          <span>Tipo de negocio</span>
+          <input id="categoria" type="text" placeholder="peluquerías" required
+                 autocomplete="off" list="categorias-sugeridas" />
+          <datalist id="categorias-sugeridas"></datalist>
+        </label>
+
+        <label class="campo campo-radio">
+          <span>Radio: <b id="radio-valor">5 km</b></span>
+          <input id="radio" type="range" min="1" max="50" step="1" value="5" />
+        </label>
+      </div>
+
+      <label class="check destacado-check">
+        <input id="campana" type="checkbox" checked />
+        <span>
+          <b>Barrido progresivo</b> — cada vez que buscas, explora zonas nuevas
+          de la ciudad y trae solo negocios que no tenías.
+          <em>Desactívalo para una búsqueda suelta de un solo tiro (máx. 60).</em>
+        </span>
+      </label>
+
+      <!-- Progreso de la campaña -->
+      <div id="progreso-campana" class="progreso oculto">
+        <div class="progreso-cabecera">
+          <span id="progreso-texto"></span>
+          <span id="progreso-pct"></span>
+        </div>
+        <div class="barra"><div id="barra-relleno"></div></div>
+        <div id="progreso-detalle" class="sub"></div>
+      </div>
+
+      <details class="avanzado">
+        <summary>Opciones avanzadas</summary>
+        <div class="grid-avanzado">
+          <label class="campo">
+            <span>Modo de búsqueda</span>
+            <select id="modo">
+              <option value="keyword">Palabra clave (hasta 60 por sector)</option>
+              <option value="tipo">Categoría exacta de Google (máx. 20)</option>
+            </select>
+          </label>
+
+          <label class="campo">
+            <span>Sectores por búsqueda (solo en barrido)</span>
+            <select id="sectores">
+              <option value="2">2 sectores · más barato</option>
+              <option value="5" selected>5 sectores</option>
+              <option value="10">10 sectores · avanza rápido</option>
+            </select>
+          </label>
+          <label class="campo">
+            <span>Páginas máximo (1 página ≈ 20 negocios = 1 request)</span>
+            <select id="paginas">
+              <option value="1">1 página · más barato</option>
+              <option value="2">2 páginas</option>
+              <option value="3" selected>3 páginas · más resultados</option>
+            </select>
+          </label>
+          <label class="check">
+            <input id="incluir-rating" type="checkbox" checked />
+            <span>Pedir rating y nº de reseñas <em>(sube un poco el costo por request)</em></span>
+          </label>
+          <label class="check">
+            <input id="guardar" type="checkbox" checked />
+            <span>Guardar en histórico y Google Sheets</span>
+          </label>
+        </div>
+      </details>
+
+      <div class="acciones">
+        <button id="btn-buscar" type="submit" class="primario">Buscar negocios</button>
+        <span id="costo-previo" class="nota"></span>
+      </div>
+    </form>
+  </section>
+
+  <div id="mensaje" class="oculto"></div>
+
+  <!-- ------------------------------------------------------ Resumen -->
+  <section id="resumen" class="stats oculto"></section>
+
+  <!-- ---------------------------------------------------- Resultados -->
+  <section id="panel-resultados" class="card oculto">
+    <div class="barra-tabla">
+      <div class="filtros">
+        <button class="tab activo" data-filtro="leads">Solo leads</button>
+        <button class="tab" data-filtro="todos">Todos</button>
+        <button class="tab" data-filtro="con-web">Ya tienen web</button>
+      </div>
+      <div class="descargas">
+        <button id="btn-xlsx" class="secundario">Descargar Excel</button>
+        <button id="btn-csv" class="secundario">Descargar CSV</button>
+        <a id="link-sheet" class="secundario oculto" target="_blank" rel="noopener">Ver Google Sheet</a>
+      </div>
+    </div>
+
+    <div class="tabla-scroll">
+      <table id="tabla">
+        <thead>
+          <tr>
+            <th>Negocio</th>
+            <th>Teléfono</th>
+            <th>Sitio web</th>
+            <th>Estado</th>
+            <th>Rating</th>
+            <th>Dirección</th>
+            <th>Maps</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+    <p id="vacio" class="vacio oculto">No hay negocios en este filtro.</p>
+  </section>
+
+  <!-- ------------------------------------------------------ Ayuda -->
+  <section class="card ayuda">
+    <details>
+      <summary>¿Cómo decide si un negocio es lead?</summary>
+      <ul>
+        <li><b>Sin sitio web</b> en su ficha de Maps → es lead.</li>
+        <li>Su "sitio web" es un <b>perfil de red social</b> → es lead.</li>
+        <li>Tiene <b>dominio propio</b> → no es lead (se guarda igual, marcado).</li>
+      </ul>
+      <p class="nota">Dominios que hoy cuentan como red social:
+        <span id="lista-redes"></span></p>
+      <p class="nota">Para ampliar la lista, edita
+        <code>app/social_domains.py</code>.</p>
+    </details>
+  </section>
+</main>
+
+<!-- --------------------------------- Confirmación de costo (modo real) -->
+<div id="modal-costo" class="modal-fondo oculto">
+  <div class="modal" role="dialog" aria-modal="true" aria-labelledby="modal-titulo">
+    <h2 id="modal-titulo">Esta búsqueda gasta dinero real</h2>
+    <p class="modal-intro">
+      Vas a llamar a la API de Google Cloud. Revisa antes de continuar:
+    </p>
+
+    <table class="desglose">
+      <tbody id="desglose-cuerpo"></tbody>
+      <tfoot>
+        <tr>
+          <th>Costo máximo estimado</th>
+          <th id="desglose-total" class="total"></th>
+        </tr>
+      </tfoot>
+    </table>
+
+    <p id="modal-cuota" class="modal-cuota"></p>
+
+    <p class="modal-nota">
+      Es una <b>estimación</b> basada en los precios de referencia del código.
+      Los precios reales los fija Google. Tu alerta de presupuesto y las cuotas
+      de Google Cloud son la protección definitiva.
+    </p>
+
+    <div class="modal-acciones">
+      <button id="modal-cancelar" type="button" class="secundario">Cancelar</button>
+      <button id="modal-confirmar" type="button" class="primario">Sí, buscar y gastar</button>
+    </div>
+  </div>
+</div>
+
+<footer>
+  <span id="footer-uso"></span>
+</footer>
+
+<script src="/static/app.js"></script>
+</body>
+</html>
