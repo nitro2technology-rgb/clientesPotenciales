@@ -39,3 +39,7 @@ Thumbs.db
 Claves appi.txt
 *claves*.txt
 *Claves*.txt
+
+.vercel
+.env*
+!.env.example
