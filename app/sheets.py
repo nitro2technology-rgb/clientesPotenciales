@@ -27,9 +27,12 @@ ENCABEZADOS = [
     "Email",
     "Estado de contacto",
     "Place ID",
+    "Telefono solo numeros",
 ]
 
-COLUMNA_PLACE_ID = 15  # 1-indexada, debe coincidir con ENCABEZADOS
+COLUMNA_PLACE_ID = 15        # 1-indexada, debe coincidir con ENCABEZADOS
+COLUMNA_TELEFONO = 6         # la original, tal cual la escribio cada busqueda
+COLUMNA_TELEFONO_LIMPIO = 16 # digitos pelados, apta para formulas
 
 
 class ErrorSheets(Exception):
@@ -53,6 +56,7 @@ def _fila(negocio: Negocio) -> list:
         negocio.email,
         negocio.estado_contacto,
         negocio.place_id,
+        negocio.telefono,
     ]
 
 

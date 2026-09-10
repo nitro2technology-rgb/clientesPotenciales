@@ -141,6 +141,22 @@ periférico Google devuelve igualmente los del centro y el barrido no traería
 nada nuevo. (Esto ya se implementó mal una vez — no volver a intentarlo con
 círculos.)
 
+**Los telefonos se guardan como digitos pelados, con indicativo.** `+57 312
+721 7006` entra como `573127217006`. El `+` inicial hacia que Google Sheets
+leyera la celda como formula y escribiera `#ERROR!`. La regla vive en
+`app/models.py` -> `solo_digitos()`, aplicada por un validador del modelo
+`Negocio`, asi que limpia por igual lo que llega de Google, lo del historico y
+lo que sale a Excel. A los numeros nacionales de 10 digitos que empiezan por 3
+o 6 se les antepone el 57; el resto se deja tal cual, porque adivinar el pais
+de un numero suelto falla mas de lo que acierta. Places devuelve ahora
+`internationalPhoneNumber` como primera opcion, que es el unico que trae
+indicativo.
+
+**El Sheet tiene una columna P, "Telefono solo numeros".** La columna F
+original se dejo intacta con lo que cargo cada busqueda. La P se relleno el 10
+de septiembre de 2026 para las 4.134 filas que ya existian, y desde entonces la
+escribe cada busqueda nueva. Es la columna buena para formulas.
+
 **Google Places no expone emails.** La columna existe vacía a propósito. Sacar
 emails exigiría visitar la web de cada negocio, y eso solo aplica a los que
 *sí* tienen web, que no son el objetivo.

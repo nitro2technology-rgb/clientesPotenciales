@@ -124,8 +124,10 @@ def _a_negocio(place: dict, params: ParametrosBusqueda, fecha: str) -> Negocio:
         place_id=place.get("id", ""),
         nombre=(place.get("displayName") or {}).get("text", ""),
         direccion=place.get("formattedAddress", ""),
-        telefono=place.get("nationalPhoneNumber")
-        or place.get("internationalPhoneNumber")
+        # Primero el internacional: es el unico que trae el indicativo de pais.
+        # El modelo le quita el '+' y los espacios (Negocio.telefono).
+        telefono=place.get("internationalPhoneNumber")
+        or place.get("nationalPhoneNumber")
         or "",
         sitio_web=place.get("websiteUri", "") or "",
         categoria_google=place.get("primaryType") or (tipos[0] if tipos else ""),

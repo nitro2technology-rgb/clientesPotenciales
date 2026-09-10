@@ -1,8 +1,37 @@
 """Modelos de datos compartidos entre backend y frontend."""
+import re
 from datetime import datetime, timezone
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+_NO_DIGITOS = re.compile(r"\D+")
+
+# Colombia: movil = 10 digitos que empiezan por 3, fijo = 10 que empiezan por 6.
+# Google los devuelve sin indicativo cuando entrega el numero en formato
+# nacional, asi que se le antepone aqui. Cualquier otra longitud se deja tal
+# cual: adivinar el pais de un numero suelto se equivoca mas de lo que acierta.
+INDICATIVO_PAIS = "57"
+_LARGO_NACIONAL = 10
+_INICIOS_NACIONALES = ("3", "6")
+
+
+def solo_digitos(telefono: str | None) -> str:
+    """Normaliza un telefono a digitos pelados con indicativo de pais.
+
+    '+57 312 721 7006' -> '573127217006'
+    '(604) 322 1809'   -> '576043221809'
+
+    Dos motivos. El '+' inicial hace que Google Sheets lea la celda como una
+    formula y escriba #ERROR! en su lugar, y los espacios, parentesis y
+    guiones estorban para buscar, marcar o cruzar los datos con otra tabla.
+    """
+    if not telefono:
+        return ""
+    digitos = _NO_DIGITOS.sub("", str(telefono))
+    if len(digitos) == _LARGO_NACIONAL and digitos.startswith(_INICIOS_NACIONALES):
+        return INDICATIVO_PAIS + digitos
+    return digitos
 
 
 class ParametrosBusqueda(BaseModel):
@@ -62,6 +91,11 @@ class Negocio(BaseModel):
     fecha_busqueda: str = ""
     ciudad_buscada: str = ""
     categoria_buscada: str = ""
+
+    @field_validator("telefono", mode="before")
+    @classmethod
+    def _telefono_solo_digitos(cls, valor):
+        return solo_digitos(valor)
 
 
 class ResultadoBusqueda(BaseModel):
