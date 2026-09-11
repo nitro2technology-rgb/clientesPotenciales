@@ -152,10 +152,23 @@ de un numero suelto falla mas de lo que acierta. Places devuelve ahora
 `internationalPhoneNumber` como primera opcion, que es el unico que trae
 indicativo.
 
-**El Sheet tiene una columna P, "Telefono solo numeros".** La columna F
-original se dejo intacta con lo que cargo cada busqueda. La P se relleno el 10
-de septiembre de 2026 para las 4.134 filas que ya existian, y desde entonces la
-escribe cada busqueda nueva. Es la columna buena para formulas.
+**El codigo escribe 15 columnas, de la A a la O. La P es tuya.** La columna
+del telefono es la F, "Telefono", y lleva los digitos pelados. La P se llama
+"Comentario" y se rellena a mano en el Sheet: el codigo no la toca nunca.
+
+El 10 de septiembre de 2026 se probo una columna P llamada "Telefono solo
+numeros" y `_fila()` preparaba 16 valores. Esa prueba quedo descartada, pero el
+codigo siguio escribiendo el valor 16 y, cuando la P paso a ser "Comentario",
+cada busqueda nueva metia el telefono dentro de la columna de comentarios. Se
+arreglo el 11 de septiembre de 2026 quitando el valor 16 de `_fila()` y la
+constante `COLUMNA_TELEFONO_LIMPIO` (`app/sheets.py`). Ese mismo dia se
+limpiaron del Sheet los 499 telefonos que habian caido en la P, conservando los
+16 comentarios escritos a mano. Lo borrado quedo respaldado en
+`data/respaldo_columna_P_2026-09-11.csv`.
+
+Regla: `_fila()` devuelve exactamente tantos valores como `ENCABEZADOS`, y
+ninguno de los dos crece hasta la P. Si vuelve a preparar 16, la siguiente
+busqueda vuelve a pisar los comentarios.
 
 **Google Places no expone emails.** La columna existe vacía a propósito. Sacar
 emails exigiría visitar la web de cada negocio, y eso solo aplica a los que

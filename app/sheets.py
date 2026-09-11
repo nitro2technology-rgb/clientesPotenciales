@@ -27,12 +27,14 @@ ENCABEZADOS = [
     "Email",
     "Estado de contacto",
     "Place ID",
-    "Telefono solo numeros",
 ]
 
-COLUMNA_PLACE_ID = 15        # 1-indexada, debe coincidir con ENCABEZADOS
-COLUMNA_TELEFONO = 6         # la original, tal cual la escribio cada busqueda
-COLUMNA_TELEFONO_LIMPIO = 16 # digitos pelados, apta para formulas
+COLUMNA_PLACE_ID = 15   # 1-indexada, debe coincidir con ENCABEZADOS
+COLUMNA_TELEFONO = 6    # digitos pelados con indicativo, apta para formulas
+
+# La columna P del Sheet ("Comentario") se llena a mano y el codigo no la toca.
+# Es la primera que viene despues de ENCABEZADOS, asi que un valor de sobra en
+# _fila() caeria justo encima de los comentarios escritos por el usuario.
 
 
 class ErrorSheets(Exception):
@@ -40,6 +42,11 @@ class ErrorSheets(Exception):
 
 
 def _fila(negocio: Negocio) -> list:
+    """Los 15 valores de una fila, en el orden de ENCABEZADOS.
+
+    Nunca puede devolver mas: lo que sobre se escribiria en la columna P, que
+    es de comentarios escritos a mano.
+    """
     return [
         negocio.fecha_busqueda,
         negocio.ciudad_buscada,
@@ -56,7 +63,6 @@ def _fila(negocio: Negocio) -> list:
         negocio.email,
         negocio.estado_contacto,
         negocio.place_id,
-        negocio.telefono,
     ]
 
 
