@@ -41,6 +41,18 @@ class Settings(BaseSettings):
     # Modo demo (sin llamadas reales a Google)
     demo_mode: bool = False
 
+    # Clave de la pagina de seguimiento de clientes (/crm). Si se deja vacia
+    # la pagina queda abierta, igual que el resto del sitio. Ponerla es la
+    # forma de que los telefonos y los comentarios de las llamadas no queden
+    # a la vista de cualquiera que acierte la URL.
+    crm_password: str = ""
+
+    # Cada vez que anotas un seguimiento, ademas de guardarlo en la base se
+    # refleja en el Google Sheet: el estado en la columna N y el comentario
+    # en la Q. Ponlo en false si prefieres que guardar sea instantaneo y
+    # volcar al Sheet solo cuando pulses el boton.
+    crm_sync_sheet: bool = True
+
     # Servidor
     host: str = "127.0.0.1"
     port: int = 8000
@@ -52,6 +64,7 @@ class Settings(BaseSettings):
         "google_sheet_tab",
         "turso_database_url",
         "turso_auth_token",
+        "crm_password",
         mode="before",
     )
     @classmethod
@@ -92,6 +105,10 @@ class Settings(BaseSettings):
             except (json.JSONDecodeError, OSError):
                 return None
         return None
+
+    @property
+    def crm_protegido(self) -> bool:
+        return bool(self.crm_password)
 
     @property
     def sheets_habilitado(self) -> bool:

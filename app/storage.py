@@ -16,6 +16,7 @@ El resto del modulo no distingue entre los dos: `conectar()` devuelve un
 objeto con la misma interfaz en ambos casos.
 """
 import hashlib
+import re
 import sqlite3
 from contextlib import contextmanager
 from datetime import date
@@ -94,6 +95,39 @@ CREATE TABLE IF NOT EXISTS celdas (
 );
 CREATE INDEX IF NOT EXISTS idx_celdas_pend
     ON celdas(campana_id, explorada, indice);
+
+-- ------------------------------------------------------------- CRM
+-- Seguimiento comercial. Vive en tablas aparte y NO dentro de `negocios`
+-- a proposito: las altas de negocios usan INSERT OR IGNORE con una tupla
+-- posicional, asi que anadir columnas ahi romperia la insercion. Ademas el
+-- scraping y la gestion de clientes cambian por motivos distintos.
+CREATE TABLE IF NOT EXISTS seguimiento (
+    place_id        TEXT PRIMARY KEY,
+    estado          TEXT NOT NULL DEFAULT 'sin_contactar',
+    responsable     TEXT DEFAULT '',
+    proximo_paso    TEXT DEFAULT '',   -- fecha ISO: cuando volver a insistir
+    ultimo_contacto TEXT DEFAULT '',
+    ultimo_canal    TEXT DEFAULT '',
+    intentos        INTEGER NOT NULL DEFAULT 0,
+    comentario      TEXT DEFAULT '',   -- ultimo comentario, para la lista
+    actualizado     TEXT DEFAULT ''
+);
+CREATE INDEX IF NOT EXISTS idx_seg_estado ON seguimiento(estado);
+CREATE INDEX IF NOT EXISTS idx_seg_proximo ON seguimiento(proximo_paso);
+
+-- Bitacora: una fila por cada llamada, WhatsApp, correo o nota. Nunca se
+-- borra ni se edita, para que el historial de un cliente sea fiable.
+CREATE TABLE IF NOT EXISTS interacciones (
+    id           TEXT PRIMARY KEY,
+    place_id     TEXT NOT NULL,
+    fecha        TEXT,
+    canal        TEXT,
+    estado_nuevo TEXT,
+    comentario   TEXT,
+    proximo_paso TEXT,
+    autor        TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_inter_place ON interacciones(place_id, fecha);
 
 CREATE TABLE IF NOT EXISTS busquedas (
     busqueda_id TEXT PRIMARY KEY,
@@ -383,3 +417,317 @@ def sumar_requests(cantidad: int = 1) -> int:
         )
         fila = con.execute("SELECT requests FROM uso_api WHERE dia = ?", (hoy,)).fetchone()
     return fila[0]
+
+
+# --------------------------------------------------------------------- CRM
+# Consultas de la pagina de seguimiento de clientes. El vocabulario (que
+# estados existen, que canales) vive en app/crm.py; aqui solo hay SQL.
+
+ESTADO_INICIAL = "sin_contactar"
+
+# Un negocio sin fila en seguimiento cuenta como "sin contactar". Se resuelve
+# con LEFT JOIN + COALESCE en vez de crear filas vacias para los 3.700
+# negocios: asi el CRM funciona sobre lo que ya hay, sin migrar nada.
+_SELECT_CRM = """
+SELECT n.place_id, n.nombre, n.direccion, n.telefono, n.sitio_web,
+       n.categoria_google, n.rating, n.resenas, n.maps_url, n.email,
+       n.es_lead, n.motivo, n.fecha_busqueda, n.ciudad_buscada,
+       n.categoria_buscada,
+       COALESCE(s.estado, 'sin_contactar') AS estado,
+       COALESCE(s.responsable, '')         AS responsable,
+       COALESCE(s.proximo_paso, '')        AS proximo_paso,
+       COALESCE(s.ultimo_contacto, '')     AS ultimo_contacto,
+       COALESCE(s.ultimo_canal, '')        AS ultimo_canal,
+       COALESCE(s.intentos, 0)             AS intentos,
+       COALESCE(s.comentario, '')          AS comentario,
+       COALESCE(s.actualizado, '')         AS actualizado
+FROM negocios n
+LEFT JOIN seguimiento s ON s.place_id = n.place_id
+"""
+
+# La normalizacion a digitos pelados se anadio despues de las primeras
+# campanas, asi que en la base conviven "573127217006" y "312 7217006". Los
+# filtros limpian la columna al vuelo en vez de reescribir el historico: el
+# proyecto no actualiza negocios ya guardados.
+_TEL_LIMPIO = (
+    "REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE("
+    "COALESCE(n.telefono, ''), ' ', ''), '-', ''), '(', ''), ')', ''), '+', ''), '.', '')"
+)
+
+# Celular colombiano: 57 + 3xxxxxxxxx, o los 10 digitos sin indicativo que
+# devuelve Google cuando da el numero en formato nacional. Importa porque
+# WhatsApp solo funciona contra moviles.
+_ES_CELULAR = (
+    f"(({_TEL_LIMPIO} LIKE '573%' AND LENGTH({_TEL_LIMPIO}) = 12)"
+    f" OR ({_TEL_LIMPIO} LIKE '3%' AND LENGTH({_TEL_LIMPIO}) = 10))"
+)
+
+_ORDENES = {
+    # Primero los leads y, dentro de ellos, los negocios mas establecidos:
+    # son los que mas sentido tiene llamar antes.
+    "relevancia": "ORDER BY n.es_lead DESC, COALESCE(n.resenas, 0) DESC, n.nombre",
+    "nombre":     "ORDER BY n.nombre COLLATE NOCASE",
+    "reciente":   "ORDER BY COALESCE(s.actualizado, '') DESC, n.nombre",
+    "proximo":    ("ORDER BY CASE WHEN COALESCE(s.proximo_paso, '') = '' THEN 1 "
+                   "ELSE 0 END, s.proximo_paso, n.nombre"),
+    "intentos":   "ORDER BY COALESCE(s.intentos, 0) DESC, n.nombre",
+}
+
+
+def _where_crm(filtros: dict) -> tuple[str, list]:
+    """Traduce los filtros de la pagina a un WHERE con sus parametros."""
+    condiciones: list[str] = []
+    args: list = []
+
+    texto = (filtros.get("texto") or "").strip()
+    if texto:
+        patron = f"%{texto}%"
+        # El telefono se busca contra la version limpia, para que escribir
+        # "3127217006" encuentre tanto "573127217006" como "312 7217006".
+        digitos = re.sub(r"\D+", "", texto)
+        patron_tel = f"%{digitos}%" if digitos else patron
+        condiciones.append(
+            f"(n.nombre LIKE ? OR n.direccion LIKE ? OR {_TEL_LIMPIO} LIKE ?)"
+        )
+        args += [patron, patron, patron_tel]
+
+    for campo, columna in (
+        ("categoria", "n.categoria_buscada"),
+        ("ciudad", "n.ciudad_buscada"),
+        ("responsable", "COALESCE(s.responsable, '')"),
+    ):
+        valor = (filtros.get(campo) or "").strip()
+        if valor:
+            condiciones.append(f"{columna} = ?")
+            args.append(valor)
+
+    estados = filtros.get("estados") or []
+    if estados:
+        huecos = ",".join("?" for _ in estados)
+        condiciones.append(f"COALESCE(s.estado, 'sin_contactar') IN ({huecos})")
+        args += list(estados)
+
+    contactado = filtros.get("contactado")
+    if contactado == "no":
+        condiciones.append("COALESCE(s.estado, 'sin_contactar') = 'sin_contactar'")
+    elif contactado == "si":
+        condiciones.append("COALESCE(s.estado, 'sin_contactar') <> 'sin_contactar'")
+
+    es_lead = filtros.get("es_lead")
+    if es_lead == "si":
+        condiciones.append("n.es_lead = 1")
+    elif es_lead == "no":
+        condiciones.append("n.es_lead = 0")
+
+    telefono = filtros.get("telefono")
+    if telefono == "con":
+        condiciones.append(f"{_TEL_LIMPIO} <> ''")
+    elif telefono == "sin":
+        condiciones.append(f"{_TEL_LIMPIO} = ''")
+    elif telefono == "celular":
+        condiciones.append(_ES_CELULAR)
+    elif telefono == "fijo":
+        condiciones.append(f"{_TEL_LIMPIO} <> '' AND NOT {_ES_CELULAR}")
+
+    if filtros.get("agenda_hasta"):
+        condiciones.append(
+            "COALESCE(s.proximo_paso, '') <> '' AND s.proximo_paso <= ?"
+        )
+        args.append(filtros["agenda_hasta"])
+
+    if not condiciones:
+        return "", args
+    return " WHERE " + " AND ".join(condiciones), args
+
+
+def crm_listar(
+    filtros: dict, limite: int = 100, desplazamiento: int = 0,
+    orden: str = "relevancia",
+) -> tuple[list[dict], int]:
+    """Devuelve (filas de esta pagina, total que cumple el filtro)."""
+    where, args = _where_crm(filtros)
+    orden_sql = _ORDENES.get(orden, _ORDENES["relevancia"])
+    sql = f"{_SELECT_CRM}{where} {orden_sql} LIMIT ? OFFSET ?"
+    conteo = (
+        "SELECT COUNT(*) FROM negocios n "
+        "LEFT JOIN seguimiento s ON s.place_id = n.place_id" + where
+    )
+    with conectar() as con:
+        filas = [dict(f) for f in con.execute(sql, (*args, limite, desplazamiento))]
+        total = con.execute(conteo, args).fetchone()[0]
+    return filas, total
+
+
+def crm_cliente(place_id: str) -> dict | None:
+    with conectar() as con:
+        fila = con.execute(
+            f"{_SELECT_CRM} WHERE n.place_id = ?", (place_id,)
+        ).fetchone()
+    return dict(fila) if fila else None
+
+
+def crm_interacciones(place_id: str, limite: int = 200) -> list[dict]:
+    with conectar() as con:
+        return [
+            dict(f)
+            for f in con.execute(
+                "SELECT * FROM interacciones WHERE place_id = ? "
+                "ORDER BY fecha DESC LIMIT ?",
+                (place_id, limite),
+            )
+        ]
+
+
+def crm_guardar_interaccion(
+    interaccion_id: str, place_id: str, fecha: str, canal: str,
+    estado: str, comentario: str, proximo_paso: str, responsable: str,
+    cuenta_intento: bool,
+) -> None:
+    """
+    Anota la interaccion en la bitacora y deja el seguimiento al dia.
+
+    Son dos escrituras seguidas, no una transaccion: contra Turso cada
+    sentencia viaja sola y se autoconfirma. Con una sola persona llamando por
+    telefono no hay carrera posible, y el orden elegido (primero la bitacora)
+    hace que el peor caso sea una interaccion registrada sin resumen, nunca un
+    resumen sin respaldo en el historial.
+
+    ultimo_contacto y ultimo_canal solo se tocan cuando hubo un intento real:
+    una nota interna no cuenta como haber llamado.
+    """
+    with conectar() as con:
+        con.execute(
+            "INSERT INTO interacciones VALUES (?,?,?,?,?,?,?,?)",
+            (interaccion_id, place_id, fecha, canal, estado, comentario,
+             proximo_paso, responsable),
+        )
+        con.execute(
+            """INSERT INTO seguimiento (place_id, estado, responsable,
+                   proximo_paso, ultimo_contacto, ultimo_canal, intentos,
+                   comentario, actualizado)
+               VALUES (?,?,?,?,?,?,?,?,?)
+               ON CONFLICT(place_id) DO UPDATE SET
+                   estado          = excluded.estado,
+                   responsable     = excluded.responsable,
+                   proximo_paso    = excluded.proximo_paso,
+                   ultimo_contacto = CASE WHEN excluded.ultimo_contacto <> ''
+                                          THEN excluded.ultimo_contacto
+                                          ELSE seguimiento.ultimo_contacto END,
+                   ultimo_canal    = CASE WHEN excluded.ultimo_contacto <> ''
+                                          THEN excluded.ultimo_canal
+                                          ELSE seguimiento.ultimo_canal END,
+                   intentos        = seguimiento.intentos + ?,
+                   comentario      = CASE WHEN excluded.comentario <> ''
+                                          THEN excluded.comentario
+                                          ELSE seguimiento.comentario END,
+                   actualizado     = excluded.actualizado""",
+            (
+                place_id, estado, responsable, proximo_paso,
+                fecha if cuenta_intento else "",
+                canal if cuenta_intento else "",
+                1 if cuenta_intento else 0,
+                comentario, fecha,
+                1 if cuenta_intento else 0,
+            ),
+        )
+
+
+def crm_resumen() -> dict:
+    """Cuantos negocios hay en cada estado. Una sola consulta."""
+    with conectar() as con:
+        filas = con.execute(
+            "SELECT COALESCE(s.estado, 'sin_contactar') AS estado, "
+            "       COUNT(*) AS cantidad "
+            "FROM negocios n "
+            "LEFT JOIN seguimiento s ON s.place_id = n.place_id "
+            "GROUP BY COALESCE(s.estado, 'sin_contactar')"
+        )
+        return {f["estado"]: f["cantidad"] for f in filas}
+
+
+def crm_agenda(hasta: str) -> int:
+    """Cuantos clientes tienen un proximo paso vencido o para hoy."""
+    with conectar() as con:
+        fila = con.execute(
+            "SELECT COUNT(*) FROM seguimiento "
+            "WHERE proximo_paso <> '' AND proximo_paso <= ?",
+            (hasta,),
+        ).fetchone()
+    return fila[0] or 0
+
+
+def crm_valores_distintos() -> dict:
+    """Categorias, ciudades y responsables que existen, para los desplegables."""
+    with conectar() as con:
+        categorias = [
+            f[0] for f in con.execute(
+                "SELECT DISTINCT categoria_buscada FROM negocios "
+                "WHERE COALESCE(categoria_buscada, '') <> '' "
+                "ORDER BY categoria_buscada"
+            )
+        ]
+        ciudades = [
+            f[0] for f in con.execute(
+                "SELECT DISTINCT ciudad_buscada FROM negocios "
+                "WHERE COALESCE(ciudad_buscada, '') <> '' "
+                "ORDER BY ciudad_buscada"
+            )
+        ]
+        responsables = [
+            f[0] for f in con.execute(
+                "SELECT DISTINCT responsable FROM seguimiento "
+                "WHERE COALESCE(responsable, '') <> '' ORDER BY responsable"
+            )
+        ]
+    return {
+        "categorias": categorias,
+        "ciudades": ciudades,
+        "responsables": responsables,
+    }
+
+
+def crm_estados_actuales() -> dict:
+    """place_id -> estado. Se usa para saber a quien ya se toco."""
+    with conectar() as con:
+        return {
+            f["place_id"]: f["estado"]
+            for f in con.execute("SELECT place_id, estado FROM seguimiento")
+        }
+
+
+def crm_seguimiento_completo() -> dict:
+    """place_id -> {estado, comentario}, para volcarlo al Google Sheet."""
+    with conectar() as con:
+        return {
+            f["place_id"]: {"estado": f["estado"], "comentario": f["comentario"] or ""}
+            for f in con.execute(
+                "SELECT place_id, estado, comentario FROM seguimiento"
+            )
+        }
+
+
+def crm_sembrar(filas: list[tuple]) -> int:
+    """
+    Alta masiva de seguimiento sin pisar lo que ya existe.
+
+    Se usa al importar lo que ya estaba escrito a mano en el Google Sheet.
+    INSERT OR IGNORE: si el cliente ya tiene seguimiento en la app, manda la
+    app, porque es el dato mas reciente.
+    """
+    if not filas:
+        return 0
+    antes = len(crm_estados_actuales())
+    with conectar() as con:
+        con.executemany(
+            """INSERT OR IGNORE INTO seguimiento (place_id, estado, responsable,
+                   proximo_paso, ultimo_contacto, ultimo_canal, intentos,
+                   comentario, actualizado)
+               VALUES (?,?,?,?,?,?,?,?,?)""",
+            filas,
+        )
+    return len(crm_estados_actuales()) - antes
+
+
+def crm_place_ids_conocidos() -> set:
+    with conectar() as con:
+        return {f[0] for f in con.execute("SELECT place_id FROM negocios")}

@@ -383,3 +383,12 @@ footer {
 .progreso-detalle, .progreso .sub { margin-top: 7px; }
 
 .stat.descartados .valor { font-size: 24px; color: var(--suave); }
+
+/* Enlace a la pagina de seguimiento de clientes. */
+.chip.enlace-crm {
+  color: #fff;
+  text-decoration: none;
+  font-weight: 600;
+  background: rgba(255, 255, 255, .26);
+}
+.chip.enlace-crm:hover { background: rgba(255, 255, 255, .38); }

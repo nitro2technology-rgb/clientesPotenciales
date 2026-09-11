@@ -1,0 +1,235 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Seguimiento de clientes · Nitro2Tech</title>
+  <link rel="stylesheet" href="/static/styles.css" />
+  <link rel="stylesheet" href="/static/crm.css" />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>📞</text></svg>" />
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">
+    <span class="pin">📞</span>
+    <div>
+      <h1>Seguimiento de clientes</h1>
+      <p>A quién llamar, qué se habló y qué falta por hacer</p>
+    </div>
+  </div>
+  <div class="chips">
+    <a class="chip enlace" href="/">← Buscador de leads</a>
+    <a class="chip enlace oculto" id="link-sheet" target="_blank" rel="noopener">Google Sheet</a>
+    <button class="chip enlace oculto" id="btn-salir" type="button">Salir</button>
+  </div>
+</header>
+
+<!-- ------------------------------------------------- Clave (si está puesta) -->
+<div id="pantalla-clave" class="modal-fondo oculto">
+  <form class="modal" id="form-clave">
+    <h2>Seguimiento de clientes</h2>
+    <p class="modal-intro">Esta página guarda teléfonos y notas de llamadas. Escribe la clave para entrar.</p>
+    <label class="campo">
+      <span>Clave</span>
+      <input id="clave" type="password" autocomplete="current-password" required />
+    </label>
+    <p id="clave-error" class="clave-error oculto"></p>
+    <div class="modal-acciones">
+      <button type="submit" class="primario">Entrar</button>
+    </div>
+  </form>
+</div>
+
+<main id="app" class="oculto">
+
+  <!-- ------------------------------------------------------------ Resumen -->
+  <section id="resumen" class="stats resumen-crm"></section>
+
+  <!-- ------------------------------------------------------------ Filtros -->
+  <section class="card filtros-card">
+    <div class="filtros-grid">
+      <label class="campo campo-ancho">
+        <span>Buscar</span>
+        <input id="f-texto" type="text" placeholder="Nombre, teléfono o dirección" autocomplete="off" />
+      </label>
+
+      <label class="campo">
+        <span>Categoría</span>
+        <select id="f-categoria"><option value="">Todas</option></select>
+      </label>
+
+      <label class="campo">
+        <span>Ciudad</span>
+        <select id="f-ciudad"><option value="">Todas</option></select>
+      </label>
+
+      <label class="campo">
+        <span>Estado</span>
+        <select id="f-estado"><option value="">Todos</option></select>
+      </label>
+
+      <label class="campo">
+        <span>Contacto</span>
+        <select id="f-contactado">
+          <option value="">Contactadas y no contactadas</option>
+          <option value="no">Solo sin contactar</option>
+          <option value="si">Solo ya contactadas</option>
+        </select>
+      </label>
+
+      <label class="campo">
+        <span>¿Es lead?</span>
+        <select id="f-lead">
+          <option value="">Leads y no leads</option>
+          <option value="si">Solo leads (sin web propia)</option>
+          <option value="no">Solo los que ya tienen web</option>
+        </select>
+      </label>
+
+      <label class="campo">
+        <span>Teléfono</span>
+        <select id="f-telefono">
+          <option value="">Con y sin teléfono</option>
+          <option value="celular">Solo celular (sirve WhatsApp)</option>
+          <option value="fijo">Solo fijo</option>
+          <option value="con">Cualquier teléfono</option>
+          <option value="sin">Sin teléfono</option>
+        </select>
+      </label>
+
+      <label class="campo">
+        <span>Ordenar por</span>
+        <select id="f-orden"></select>
+      </label>
+    </div>
+
+    <div class="filtros-pie">
+      <label class="check">
+        <input id="f-agenda" type="checkbox" />
+        <span><b>Solo la agenda de hoy</b> <em>— los que pediste volver a llamar hoy o antes</em></span>
+      </label>
+      <div class="filtros-botones">
+        <button id="btn-limpiar" type="button" class="secundario">Quitar filtros</button>
+        <button id="btn-xlsx" type="button" class="secundario">Excel</button>
+        <button id="btn-csv" type="button" class="secundario">CSV</button>
+      </div>
+    </div>
+  </section>
+
+  <div id="mensaje" class="oculto"></div>
+
+  <!-- ---------------------------------------------------------- Resultados -->
+  <section class="card">
+    <div class="barra-tabla">
+      <p id="conteo" class="conteo"></p>
+      <div class="paginador">
+        <button id="btn-antes" type="button" class="secundario">‹ Anterior</button>
+        <span id="pagina-texto" class="nota"></span>
+        <button id="btn-despues" type="button" class="secundario">Siguiente ›</button>
+      </div>
+    </div>
+
+    <div class="tabla-scroll">
+      <table id="tabla">
+        <thead>
+          <tr>
+            <th>Negocio</th>
+            <th>Teléfono</th>
+            <th>Estado</th>
+            <th>Último contacto</th>
+            <th>Próximo paso</th>
+            <th>Último comentario</th>
+            <th class="col-acciones">Acciones</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </div>
+    <p id="vacio" class="vacio oculto">Ningún cliente cumple estos filtros.</p>
+  </section>
+
+  <!-- --------------------------------------------------- Puente con el Sheet -->
+  <section class="card ayuda">
+    <details>
+      <summary>Google Sheet: traer lo escrito a mano y devolver los estados</summary>
+      <p class="nota">
+        Cada vez que guardas un seguimiento, el estado y el comentario viajan
+        solos al Sheet: el estado a la columna N y el comentario a la columna
+        <b>Q</b>. La columna P, tus comentarios de siempre, no se toca nunca.
+      </p>
+      <div class="filtros-botones">
+        <button id="btn-importar" type="button" class="secundario">Importar del Sheet</button>
+        <button id="btn-sincronizar" type="button" class="secundario">Volcar estados al Sheet</button>
+      </div>
+      <ul class="nota">
+        <li><b>Importar</b> lee las columnas N y P del Sheet y rellena el seguimiento de los clientes que aún no lo tienen. Nunca pisa lo que ya escribiste aquí.</li>
+        <li><b>Volcar</b> repasa todo el seguimiento de golpe y deja al día las columnas N y Q. Sirve para ponerse al corriente si el Sheet estuvo caído un rato.</li>
+      </ul>
+    </details>
+  </section>
+</main>
+
+<!-- ------------------------------------------------------------- Ficha -->
+<div id="ficha-fondo" class="ficha-fondo oculto"></div>
+<aside id="ficha" class="ficha oculto" aria-labelledby="ficha-nombre">
+  <header class="ficha-cabecera">
+    <div>
+      <h2 id="ficha-nombre"></h2>
+      <p id="ficha-sub" class="sub"></p>
+    </div>
+    <button id="ficha-cerrar" type="button" class="cerrar" aria-label="Cerrar">✕</button>
+  </header>
+
+  <div class="ficha-cuerpo">
+    <div id="ficha-telefono" class="bloque-telefono"></div>
+    <dl id="ficha-datos" class="ficha-datos"></dl>
+
+    <form id="form-seguimiento" class="ficha-form">
+      <h3>Registrar seguimiento</h3>
+
+      <div class="campo">
+        <span>¿Qué hiciste?</span>
+        <div id="canales" class="canales"></div>
+      </div>
+
+      <label class="campo">
+        <span>¿Cómo queda?</span>
+        <select id="s-estado"></select>
+      </label>
+
+      <label class="campo">
+        <span>Comentario de la llamada</span>
+        <textarea id="s-comentario" rows="3" placeholder="Qué se habló, quién atendió, qué quedó pendiente..."></textarea>
+      </label>
+
+      <div class="ficha-form-fila">
+        <label class="campo">
+          <span>Volver a contactar el</span>
+          <input id="s-proximo" type="date" />
+        </label>
+        <label class="campo">
+          <span>Responsable</span>
+          <input id="s-responsable" type="text" placeholder="Quién llamó" autocomplete="off" list="responsables" />
+          <datalist id="responsables"></datalist>
+        </label>
+      </div>
+
+      <button type="submit" class="primario ancho">Guardar seguimiento</button>
+    </form>
+
+    <section class="ficha-historial">
+      <h3>Historial</h3>
+      <ol id="historial" class="linea"></ol>
+      <p id="historial-vacio" class="nota">Todavía no hay nada registrado con este cliente.</p>
+    </section>
+  </div>
+</aside>
+
+<footer>
+  <span>El seguimiento se guarda en la base de datos de la app. Cada cambio de estado queda registrado en el historial.</span>
+</footer>
+
+<script src="/static/crm.js"></script>
+</body>
+</html>

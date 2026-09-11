@@ -4,18 +4,22 @@ Generador de Leads desde Google Maps - Backend FastAPI.
 Arrancar:  python run.py      (o)   uvicorn app.main:app --reload
 Abrir:     http://127.0.0.1:8000
 """
+import hashlib
+import hmac
+import secrets
 import unicodedata
 import uuid
 from datetime import date
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import APIRouter, Body, Depends, FastAPI, HTTPException, Query, Request
 from fastapi.responses import FileResponse, JSONResponse, Response
 from fastapi.staticfiles import StaticFiles
 
-from app import campaign, exports, places, sheets, storage, turso
+from app import campaign, crm, exports, places, sheets, storage, turso
 from app.classifier import clasificar
 from app.config import RAIZ, settings
 from app.models import (
+    InteraccionEntrada,
     Negocio,
     ParametrosBusqueda,
     ProgresoCampana,
@@ -360,3 +364,214 @@ def index() -> FileResponse:
 
 
 app.mount("/static", StaticFiles(directory=DIR_STATIC), name="static")
+
+
+# =====================================================================
+# Seguimiento de clientes (/crm)
+# =====================================================================
+# Vive en el mismo dominio y la misma app que el buscador porque trabaja
+# sobre la misma base: los negocios que encuentra el buscador son los
+# clientes a los que hay que llamar.
+
+COOKIE_CRM = "crm_sesion"
+_DIAS_SESION_CRM = 30
+
+
+def _token_crm() -> str:
+    """Cookie derivada de la clave. No se guarda ninguna sesion en memoria.
+
+    Hace falta que sea asi porque en serverless cada peticion puede caer en
+    una instancia distinta: una tabla de sesiones en RAM caducaria sola y de
+    forma impredecible.
+    """
+    return hmac.new(
+        settings.crm_password.encode("utf-8"), b"crm-seguimiento", hashlib.sha256
+    ).hexdigest()
+
+
+def exigir_crm(request: Request) -> None:
+    """Puerta del seguimiento. Sin CRM_PASSWORD configurada, no hay puerta."""
+    if not settings.crm_protegido:
+        return
+    if not secrets.compare_digest(request.cookies.get(COOKIE_CRM, ""), _token_crm()):
+        raise HTTPException(
+            status_code=401,
+            detail="Necesitas la clave para ver el seguimiento de clientes.",
+        )
+
+
+@app.get("/api/crm/sesion")
+def crm_sesion(request: Request) -> dict:
+    """Si la pagina necesita clave y si este navegador ya la dio."""
+    if not settings.crm_protegido:
+        return {"protegido": False, "autenticado": True}
+    valida = secrets.compare_digest(
+        request.cookies.get(COOKIE_CRM, ""), _token_crm()
+    )
+    return {"protegido": True, "autenticado": valida}
+
+
+@app.post("/api/crm/login")
+def crm_login(
+    request: Request, respuesta: Response, clave: str = Body("", embed=True)
+) -> dict:
+    if not settings.crm_protegido:
+        return {"protegido": False, "autenticado": True}
+    if not secrets.compare_digest(clave.strip(), settings.crm_password):
+        raise HTTPException(status_code=401, detail="Clave incorrecta.")
+    respuesta.set_cookie(
+        COOKIE_CRM,
+        _token_crm(),
+        max_age=_DIAS_SESION_CRM * 24 * 3600,
+        httponly=True,
+        samesite="lax",
+        secure=request.url.scheme == "https",
+    )
+    return {"protegido": True, "autenticado": True}
+
+
+@app.post("/api/crm/logout")
+def crm_logout(respuesta: Response) -> dict:
+    respuesta.delete_cookie(COOKIE_CRM)
+    return {"protegido": settings.crm_protegido, "autenticado": False}
+
+
+crm_router = APIRouter(prefix="/api/crm", dependencies=[Depends(exigir_crm)])
+
+
+@crm_router.get("/opciones")
+def crm_opciones() -> dict:
+    """Vocabulario y valores de los filtros. Una sola llamada al abrir."""
+    return crm.opciones()
+
+
+def _filtros_crm(
+    texto: str, categoria: str, ciudad: str, responsable: str,
+    estados: list[str], contactado: str, es_lead: str, telefono: str,
+    agenda: bool,
+) -> dict:
+    return {
+        "texto": texto,
+        "categoria": categoria,
+        "ciudad": ciudad,
+        "responsable": responsable,
+        "estados": [e for e in estados if e in crm.CLAVES_ESTADO],
+        "contactado": contactado,
+        "es_lead": es_lead,
+        "telefono": telefono,
+        "agenda_hasta": date.today().isoformat() if agenda else "",
+    }
+
+
+@crm_router.get("/clientes")
+def crm_clientes(
+    texto: str = "",
+    categoria: str = "",
+    ciudad: str = "",
+    responsable: str = "",
+    estados: list[str] = Query(default=[]),
+    contactado: str = Query("", pattern="^(si|no|)$"),
+    es_lead: str = Query("", pattern="^(si|no|)$"),
+    telefono: str = Query("", pattern="^(con|sin|celular|fijo|)$"),
+    agenda: bool = False,
+    orden: str = "relevancia",
+    pagina: int = Query(1, ge=1),
+    limite: int = Query(60, ge=1, le=crm.MAX_POR_PAGINA),
+) -> dict:
+    filtros = _filtros_crm(
+        texto, categoria, ciudad, responsable, estados,
+        contactado, es_lead, telefono, agenda,
+    )
+    return crm.listar(filtros, limite=limite, pagina=pagina, orden=orden)
+
+
+@crm_router.get("/cliente/{place_id}")
+def crm_cliente(place_id: str) -> dict:
+    datos = crm.detalle(place_id)
+    if datos is None:
+        raise HTTPException(status_code=404, detail="Ese negocio no existe.")
+    return datos
+
+
+@crm_router.post("/cliente/{place_id}/interaccion")
+def crm_interaccion(place_id: str, entrada: InteraccionEntrada) -> dict:
+    """Anota una llamada, un WhatsApp, un correo o una nota, y fija el estado."""
+    try:
+        return crm.registrar(
+            place_id=place_id,
+            estado=entrada.estado,
+            canal=entrada.canal,
+            comentario=entrada.comentario,
+            proximo_paso=entrada.proximo_paso,
+            responsable=entrada.responsable,
+        )
+    except crm.ErrorCRM as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@crm_router.get("/descargar/{formato}")
+def crm_descargar(
+    formato: str,
+    texto: str = "",
+    categoria: str = "",
+    ciudad: str = "",
+    responsable: str = "",
+    estados: list[str] = Query(default=[]),
+    contactado: str = Query("", pattern="^(si|no|)$"),
+    es_lead: str = Query("", pattern="^(si|no|)$"),
+    telefono: str = Query("", pattern="^(con|sin|celular|fijo|)$"),
+    agenda: bool = False,
+    orden: str = "relevancia",
+) -> Response:
+    """Baja a Excel o CSV exactamente lo que se ve con los filtros puestos."""
+    if formato not in ("xlsx", "csv"):
+        raise HTTPException(status_code=400, detail="Formato debe ser 'xlsx' o 'csv'.")
+
+    filtros = _filtros_crm(
+        texto, categoria, ciudad, responsable, estados,
+        contactado, es_lead, telefono, agenda,
+    )
+    # Una sola pagina grande: el tope existe para no armar un Excel de 50 MB
+    # sin querer, no para limitar el trabajo del dia.
+    datos = crm.listar(filtros, limite=crm.MAX_POR_PAGINA, pagina=1, orden=orden)
+    clientes = datos["clientes"]
+    if not clientes:
+        raise HTTPException(status_code=404, detail="No hay filas que descargar.")
+
+    if formato == "csv":
+        contenido = exports.crm_a_csv(clientes)
+        media = "text/csv; charset=utf-8"
+    else:
+        contenido = exports.crm_a_xlsx(clientes)
+        media = "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+
+    nombre = f"seguimiento_{_limpiar(categoria or ciudad or 'clientes')}.{formato}"
+    return Response(
+        content=contenido,
+        media_type=media,
+        headers={"Content-Disposition": f'attachment; filename="{nombre}"'},
+    )
+
+
+@crm_router.post("/sheet/importar")
+def crm_importar_sheet() -> dict:
+    """
+    Recupera el estado y los comentarios que ya estaban escritos a mano.
+
+    Se puede repetir sin miedo: nunca pisa un seguimiento hecho desde aqui.
+    """
+    return crm.importar_desde_sheet()
+
+
+@crm_router.post("/sheet/sincronizar")
+def crm_sincronizar_sheet() -> dict:
+    """Vuelca el estado actual a la columna N del Sheet. Nunca toca la P."""
+    return crm.sincronizar_sheet()
+
+
+app.include_router(crm_router)
+
+
+@app.get("/crm")
+def pagina_crm() -> FileResponse:
+    return FileResponse(DIR_STATIC / "crm.html")

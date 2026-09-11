@@ -117,3 +117,33 @@ class ResultadoBusqueda(BaseModel):
 
 def ahora_iso() -> str:
     return datetime.now(timezone.utc).astimezone().strftime("%Y-%m-%d %H:%M:%S")
+
+
+class InteraccionEntrada(BaseModel):
+    """Lo que manda la pagina de seguimiento al anotar una llamada o un cambio.
+
+    `estado` es obligatorio a proposito: toda anotacion deja al cliente en un
+    estado explicito, para que nunca haya que adivinar en que quedo la cosa.
+    """
+    estado: str = Field(..., min_length=2)
+    canal: str = "llamada"
+    comentario: str = ""
+    proximo_paso: str = ""     # fecha ISO (YYYY-MM-DD), o vacio para quitarla
+    responsable: str = ""
+
+    @field_validator("proximo_paso", mode="before")
+    @classmethod
+    def _fecha_valida(cls, valor):
+        """Acepta vacio o YYYY-MM-DD; cualquier otra cosa se descarta.
+
+        Sin esto un texto libre entraria en la columna por la que se ordena la
+        agenda y la dejaria mal ordenada sin que se note.
+        """
+        texto = (valor or "").strip()
+        if not texto:
+            return ""
+        try:
+            datetime.strptime(texto, "%Y-%m-%d")
+        except ValueError:
+            return ""
+        return texto
